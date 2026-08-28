@@ -71,7 +71,7 @@ label.check.adv-only {
   align-items: center;
 }
 .brand-logo {
-  height: 30px;
+  height: 34px;
   /* logo ships on a near-black plate; lighten blends it into the app bg */
   mix-blend-mode: lighten;
 }
