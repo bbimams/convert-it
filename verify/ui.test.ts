@@ -7,7 +7,15 @@ GlobalRegistrator.register();
 
 interface InvokeCall {
   cmd: string;
-  args: { args?: string[]; duration?: number } | undefined;
+  args:
+    | {
+        input?: string;
+        output?: string;
+        pre?: string[];
+        post?: string[];
+        duration?: number;
+      }
+    | undefined;
 }
 const invoked: InvokeCall[] = [];
 let doneListener: ((e: { payload: unknown }) => void) | undefined;
@@ -131,7 +139,7 @@ test("multi-file export previews per-segment command", () => {
     "multi";
   document.getElementById("trim-export")!.dispatchEvent(new Event("change"));
   const cmd = document.getElementById("cmd")!.textContent!;
-  expect(cmd).toContain("-ss 00:00:00 -to 00:00:03");
+  expect(cmd).toContain("-ss 00:00:00.000 -to 00:00:03.000");
   expect(cmd).toContain("_seg1.");
   expect(cmd).toContain("(×2 files)");
 });
@@ -141,15 +149,15 @@ test("multi-file convert queues both segments with numbered outputs", async () =
   click("#btn-convert");
   await flush();
   expect(startCalls().length).toBe(1);
-  expect(startCalls()[0].args?.args?.at(-1)).toBe("/tmp/mock-out_seg1.mp4");
-  expect(startCalls()[0].args?.args).toContain("-ss");
+  expect(startCalls()[0].args?.output).toBe("/tmp/mock-out_seg1.mp4");
+  expect(startCalls()[0].args?.pre).toContain("-ss");
   expect(startCalls()[0].args?.duration).toBe(3);
 
   // finishing job 1 must auto-start job 2
   doneListener!({ payload: { ok: true, cancelled: false, message: "" } });
   await flush();
   expect(startCalls().length).toBe(2);
-  expect(startCalls()[1].args?.args?.at(-1)).toBe("/tmp/mock-out_seg2.mp4");
+  expect(startCalls()[1].args?.output).toBe("/tmp/mock-out_seg2.mp4");
   expect(startCalls()[1].args?.duration).toBe(3);
 
   // finishing job 2 ends the queue
@@ -170,4 +178,37 @@ test("cancellation invokes cancel and stops the queue", async () => {
   await flush();
   expect(document.getElementById("status")!.textContent).toContain("Cancelled");
   expect(startCalls().length).toBe(1); // no further job after cancel
+});
+
+test("copy codec with active filters forces re-encode", () => {
+  click(modeBtn("convert"));
+  (document.getElementById("vcodec") as HTMLSelectElement).value = "copy";
+  document.getElementById("vcodec")!.dispatchEvent(new Event("change"));
+  (document.getElementById("f-crop") as HTMLInputElement).checked = true;
+  document.getElementById("f-crop")!.dispatchEvent(new Event("change"));
+  const cmd = document.getElementById("cmd")!.textContent!;
+  expect(cmd).toContain("-c:v libx264");
+  expect(cmd).toContain("crop=");
+  (document.getElementById("f-crop") as HTMLInputElement).checked = false;
+  (document.getElementById("vcodec") as HTMLSelectElement).value = "libx264";
+});
+
+test("vp9 export omits the x264/x265 preset option", () => {
+  click(modeBtn("convert"));
+  (document.getElementById("vcodec") as HTMLSelectElement).value = "libvpx-vp9";
+  document.getElementById("vcodec")!.dispatchEvent(new Event("change"));
+  const cmd = document.getElementById("cmd")!.textContent!;
+  expect(cmd).toContain("-c:v libvpx-vp9");
+  expect(cmd).not.toContain("-preset");
+});
+
+test("GIF export includes active filters in its chain", () => {
+  click(modeBtn("gif"));
+  (document.getElementById("f-crop") as HTMLInputElement).checked = true;
+  document.getElementById("f-crop")!.dispatchEvent(new Event("change"));
+  const cmd = document.getElementById("cmd")!.textContent!;
+  expect(cmd).toContain("-vf");
+  expect(cmd).toContain("crop=");
+  expect(cmd).toContain("fps=");
+  (document.getElementById("f-crop") as HTMLInputElement).checked = false;
 });

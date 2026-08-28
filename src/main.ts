@@ -10,6 +10,14 @@ interface Segment {
   out: number;
 }
 
+interface QueuedJob {
+  input: string;
+  output: string;
+  pre: string[];
+  post: string[];
+  duration: number;
+}
+
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 
@@ -24,19 +32,21 @@ const state = {
   activeSeg: 0,
   converting: false,
   // multi-file export queue
-  queue: [] as { args: string[]; duration: number }[],
+  queue: [] as QueuedJob[],
   queueIndex: 0,
   queueTotal: 0,
 };
 
 // ---------- helpers ----------
 
-function fmtTime(s: number): string {
+function fmtTime(s: number, decimals = 0): string {
   s = Math.max(0, s);
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const sec = Math.floor(s % 60);
-  return [h, m, sec].map((n) => String(n).padStart(2, "0")).join(":");
+  let out = [h, m, sec].map((n) => String(n).padStart(2, "0")).join(":");
+  if (decimals > 0) out += (s % 1).toFixed(decimals).slice(1);
+  return out;
 }
 
 function parseTime(t: string): number {
@@ -113,20 +123,31 @@ interface BuiltArgs {
   ext: string;
 }
 
+interface SegArgs {
+  pre: string[];
+  post: string[];
+}
+
 // Encoding/output args for a single input pass. `seg` limits to one segment;
 // omitted = no trim (used when concat handles segmentation).
 function buildArgs(seg?: Segment): BuiltArgs {
-  const pre = seg ? ["-ss", fmtTime(seg.in), "-to", fmtTime(seg.out)] : [];
+  const pre = seg
+    ? ["-ss", fmtTime(seg.in, 3), "-to", fmtTime(seg.out, 3)]
+    : [];
   const post: string[] = [];
 
   if (state.mode === "gif") {
     const fps = (<HTMLSelectElement>$("gif-fps")).value;
     const width = (<HTMLInputElement>$("gif-width")).value || "480";
     const palette = (<HTMLInputElement>$("gif-palette")).checked;
-    const base = `fps=${fps},scale=${width}:-1:flags=lanczos`;
+    const chain = [
+      ...buildFilters(),
+      `fps=${fps}`,
+      `scale=${width}:-1:flags=lanczos`,
+    ].join(",");
     const vf = palette
-      ? `${base},split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`
-      : base;
+      ? `${chain},split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`
+      : chain;
     post.push("-vf", vf, "-loop", "0");
     return { pre, post, ext: "gif" };
   }
@@ -141,20 +162,23 @@ function buildArgs(seg?: Segment): BuiltArgs {
     return { pre, post, ext: fmt };
   }
 
-  const vcodec = (<HTMLSelectElement>$("vcodec")).value;
+  let vcodec = (<HTMLSelectElement>$("vcodec")).value;
   const trimCopy =
     state.mode === "trim" && (<HTMLInputElement>$("trim-copy")).checked;
 
-  if (trimCopy) {
+  if (trimCopy && filters.length === 0) {
     post.push("-c", "copy");
     return { pre, post, ext: fmt };
   }
 
-  if (filters.length && vcodec !== "copy") post.push("-vf", filters.join(","));
+  // stream copy is impossible once filters apply — fall back to h.264
+  if (vcodec === "copy" && filters.length) vcodec = "libx264";
+  if (filters.length) post.push("-vf", filters.join(","));
   post.push("-c:v", vcodec);
   if (vcodec !== "copy") {
     post.push("-crf", (<HTMLInputElement>$("crf")).value);
-    post.push("-preset", (<HTMLSelectElement>$("preset")).value);
+    if (vcodec === "libx264" || vcodec === "libx265")
+      post.push("-preset", (<HTMLSelectElement>$("preset")).value);
   }
   const acodec = (<HTMLSelectElement>$("acodec")).value;
   if (acodec === "none") post.push("-an");
@@ -166,7 +190,7 @@ function buildArgs(seg?: Segment): BuiltArgs {
 }
 
 // Joins multiple segments into one output with trim+concat filter_complex.
-function buildConcatArgs(segs: Segment[], input: string, out: string): string[] {
+function buildConcatArgs(segs: Segment[]): SegArgs {
   const fmt = (<HTMLSelectElement>$("out-format")).value;
   const audioOnly = fmt === "mp3" || fmt === "wav";
   const videoOut = !audioOnly && state.hasVideo;
@@ -202,29 +226,26 @@ function buildConcatArgs(segs: Segment[], input: string, out: string): string[] 
     mapV = "[vf]";
   }
 
-  const args = ["-i", input, "-filter_complex", parts.join(";")];
+  const post: string[] = ["-filter_complex", parts.join(";")];
   if (videoOut) {
-    args.push("-map", mapV);
+    post.push("-map", mapV);
     const vcodec = (<HTMLSelectElement>$("vcodec")).value;
     const enc = vcodec === "copy" ? "libx264" : vcodec; // copy impossible after filtering
-    args.push(
-      "-c:v", enc,
-      "-crf", (<HTMLInputElement>$("crf")).value,
-      "-preset", (<HTMLSelectElement>$("preset")).value
-    );
+    post.push("-c:v", enc, "-crf", (<HTMLInputElement>$("crf")).value);
+    if (enc === "libx264" || enc === "libx265")
+      post.push("-preset", (<HTMLSelectElement>$("preset")).value);
   }
   if (audio) {
-    args.push("-map", "[ao]");
-    if (fmt === "mp3") args.push("-c:a", "libmp3lame");
-    else if (fmt === "wav") args.push("-c:a", "pcm_s16le");
+    post.push("-map", "[ao]");
+    if (fmt === "mp3") post.push("-c:a", "libmp3lame");
+    else if (fmt === "wav") post.push("-c:a", "pcm_s16le");
     else {
       const acodec = (<HTMLSelectElement>$("acodec")).value;
-      args.push("-c:a", acodec === "copy" ? "aac" : acodec);
+      post.push("-c:a", acodec === "copy" ? "aac" : acodec);
     }
-    if (fmt !== "wav") args.push("-b:a", (<HTMLSelectElement>$("abitrate")).value);
+    if (fmt !== "wav") post.push("-b:a", (<HTMLSelectElement>$("abitrate")).value);
   }
-  args.push(out);
-  return args;
+  return { pre: [], post };
 }
 
 function multiFileExport(): boolean {
@@ -252,10 +273,8 @@ function updateCmd() {
 
   if (multiSegmentJoin()) {
     const ext = (<HTMLSelectElement>$("out-format")).value;
-    parts = [
-      "ffmpeg",
-      ...buildConcatArgs(segs, input, `${stripExt(input)}_out.${ext}`),
-    ];
+    const { post } = buildConcatArgs(segs);
+    parts = ["ffmpeg", "-i", input, ...post, `${stripExt(input)}_out.${ext}`];
   } else if (multiFileExport()) {
     const { pre, post, ext } = buildArgs(segs[0]);
     parts = [
@@ -268,7 +287,6 @@ function updateCmd() {
     const { pre, post, ext } = buildArgs(seg);
     parts = ["ffmpeg", ...pre, "-i", input, ...post, `${stripExt(input)}_out.${ext}`];
   }
-
   $("cmd").textContent = parts
     .map((p) => (/[\s'";\[\]]/.test(p) && !p.startsWith("(") ? `"${p}"` : p))
     .join(" ");
@@ -555,10 +573,17 @@ function endJobs() {
 }
 
 async function runNextQueued(): Promise<boolean> {
-  const job = state.queue.shift();
+  const job = state.queue[0];
   if (!job) return false;
+  await invoke("start_convert", {
+    input: job.input,
+    output: job.output,
+    pre: job.pre,
+    post: job.post,
+    duration: job.duration,
+  });
+  state.queue.shift();
   state.queueIndex += 1;
-  await invoke("start_convert", { args: job.args, duration: job.duration });
   setStatus(
     state.queueTotal > 1
       ? `Converting segment ${state.queueIndex}/${state.queueTotal}…`
@@ -580,8 +605,13 @@ async function startConvert() {
     setStatus("Source has no video stream — cannot export GIF.", "error");
     return;
   }
+  if (!state.hasVideo && !state.hasAudio) {
+    setStatus("Source has no audio or video streams — nothing to convert.", "error");
+    return;
+  }
 
   const segs = sortedSegments();
+  const input = state.file;
 
   if (multiSegmentJoin()) {
     const ext = (<HTMLSelectElement>$("out-format")).value;
@@ -592,7 +622,10 @@ async function startConvert() {
     if (!outPath) return;
     state.queue = [
       {
-        args: buildConcatArgs(segs, state.file, outPath),
+        pre: [],
+        post: buildConcatArgs(segs).post,
+        input,
+        output: outPath,
         duration: trimmedDuration(),
       },
     ];
@@ -604,11 +637,14 @@ async function startConvert() {
       filters: [{ name: ext, extensions: [ext] }],
     });
     if (!outPath) return;
-    const base = outPath.replace(/(_seg1)?\.[^.]+$/, "");
+    const base = outPath.replace(/\.[^.]+$/, "").replace(/_seg1$/, "");
     state.queue = segs.map((seg, i) => {
       const { pre, post } = buildArgs(seg);
       return {
-        args: [...pre, "-i", state.file!, ...post, `${base}_seg${i + 1}.${ext}`],
+        pre,
+        post,
+        input,
+        output: `${base}_seg${i + 1}.${ext}`,
         duration: seg.out - seg.in,
       };
     });
@@ -622,7 +658,10 @@ async function startConvert() {
     if (!outPath) return;
     state.queue = [
       {
-        args: [...pre, "-i", state.file, ...post, outPath],
+        pre,
+        post,
+        input,
+        output: outPath,
         duration: seg ? seg.out - seg.in : state.duration,
       },
     ];
