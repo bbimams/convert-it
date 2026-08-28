@@ -457,7 +457,21 @@ function addSegment() {
     start = cursor;
   }
   if (bestGap < 0.5) {
-    setStatus("No room for another segment — shrink existing ones first.");
+    // no gap — split the largest segment in half instead
+    const largest = state.segments.reduce((a, b) =>
+      b.out - b.in > a.out - a.in ? b : a
+    );
+    if (largest.out - largest.in < 1) {
+      setStatus("No room for another segment — shrink existing ones first.");
+      return;
+    }
+    const mid = (largest.in + largest.out) / 2;
+    const end = largest.out;
+    largest.out = mid;
+    state.segments.push({ in: mid, out: end });
+    state.activeSeg = state.segments.length - 1;
+    renderTimeline();
+    updateCmd();
     return;
   }
   const len = Math.min(bestGap, Math.max(1, state.duration * 0.1));
