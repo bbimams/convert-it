@@ -19,6 +19,11 @@
   box-sizing: border-box;
 }
 
+/* hidden attr must beat class display rules (flex/grid) */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
