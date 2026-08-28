@@ -17,8 +17,14 @@ fn find_bin(name: &str) -> String {
     name.to_string()
 }
 
+/// Probes media metadata and grants the asset protocol access to this file
+/// so the WebView can preview it. Scope is per-file at runtime instead of a
+/// blanket `**` filesystem grant.
 #[tauri::command]
-fn probe_media(path: String) -> Result<serde_json::Value, String> {
+fn probe_media(app: AppHandle, path: String) -> Result<serde_json::Value, String> {
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|e| e.to_string())?;
     let out = Command::new(find_bin("ffprobe"))
         .args([
             "-v",
@@ -46,7 +52,7 @@ fn ffmpeg_capabilities() -> Result<Vec<String>, String> {
         .map_err(|e| format!("failed to run ffmpeg: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout);
     let mut caps = Vec::new();
-    for f in ["drawtext", "hqdn3d", "palettegen"] {
+    for f in ["drawtext", "hqdn3d", "palettegen", "paletteuse"] {
         if text.lines().any(|l| l.split_whitespace().nth(1) == Some(f)) {
             caps.push(f.to_string());
         }

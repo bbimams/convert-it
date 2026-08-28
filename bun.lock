@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "tauri-app",
+      "name": "convert-it",
       "dependencies": {
         "@tabler/icons-webfont": "^3.46.0",
         "@tauri-apps/api": "^2.11.1",

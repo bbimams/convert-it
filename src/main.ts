@@ -355,6 +355,16 @@ function setupUI() {
     $("btn-simple").classList.remove("active");
   });
 
+  // hide the Simple/Advanced toggle on tabs with no advanced-only options
+  const updateSegVisibility = () => {
+    const panel = document.querySelector<HTMLElement>(
+      `[data-panel="${state.mode}"]`
+    );
+    const hasAdvanced = !!panel?.querySelector(".adv-only");
+    (document.querySelector(".seg") as HTMLElement).hidden = !hasAdvanced;
+  };
+  updateSegVisibility();
+
   // mode nav
   document.querySelectorAll<HTMLButtonElement>(".mode-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -365,6 +375,7 @@ function setupUI() {
       document
         .querySelectorAll<HTMLElement>("[data-panel]")
         .forEach((p) => (p.hidden = p.dataset.panel !== state.mode));
+      updateSegVisibility();
       updateCmd();
     });
   });
@@ -416,21 +427,24 @@ function setupUI() {
 async function applyCapabilities() {
   try {
     const caps = await invoke<string[]>("ffmpeg_capabilities");
-    const requirements: Record<string, string> = {
-      "f-watermark": "drawtext",
-      "f-denoise": "hqdn3d",
+    const requirements: Record<string, string[]> = {
+      "f-watermark": ["drawtext"],
+      "f-denoise": ["hqdn3d"],
+      "gif-palette": ["palettegen", "paletteuse"],
     };
-    for (const [id, filter] of Object.entries(requirements)) {
-      if (caps.includes(filter)) continue;
+    for (const [id, filters] of Object.entries(requirements)) {
+      const missing = filters.filter((f) => !caps.includes(f));
+      if (missing.length === 0) continue;
       const toggle = $<HTMLInputElement>(id);
       toggle.checked = false;
       toggle.disabled = true;
-      const row = toggle.closest(".filter-row") as HTMLElement | null;
+      const row = toggle.closest(".filter-row, .check") as HTMLElement | null;
       if (row) {
         row.style.opacity = "0.4";
-        row.title = `Not available in this ffmpeg build (missing ${filter} filter)`;
+        row.title = `Not available in this ffmpeg build (missing ${missing.join(", ")})`;
       }
     }
+    updateCmd();
   } catch {
     // ffmpeg missing entirely; surfaced on first probe/convert instead
   }
