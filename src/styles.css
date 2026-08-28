@@ -3,14 +3,14 @@
   --surface-1: #1a1a20;
   --surface-2: #17171c;
   --border: #2c2c35;
-  --border-accent: #5b8cff;
+  --border-accent: #34d3a6;
   --text: #e8e8ec;
   --text-secondary: #b6b6c2;
   --text-muted: #6f6f7d;
-  --text-accent: #8fb0ff;
-  --fill-accent: #4b7bff;
-  --on-accent: #ffffff;
-  --bg-accent-muted: rgba(75, 123, 255, 0.16);
+  --text-accent: #5ce0b8;
+  --fill-accent: #1fbf92;
+  --on-accent: #06231a;
+  --bg-accent-muted: rgba(31, 191, 146, 0.16);
   --radius: 8px;
   --font-mono: "SF Mono", ui-monospace, Menlo, monospace;
 }
@@ -64,17 +64,11 @@ label.check.adv-only {
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
 }
-.brand i {
-  font-size: 20px;
-  color: var(--text-accent);
-}
-.brand p {
-  font-family: var(--font-mono);
-  font-weight: 500;
-  font-size: 15px;
-  margin: 0;
+.brand-logo {
+  height: 30px;
+  /* logo ships on a near-black plate; lighten blends it into the app bg */
+  mix-blend-mode: lighten;
 }
 .topbar-actions {
   display: flex;
@@ -452,4 +446,71 @@ input[type="range"] {
   color: var(--text-muted);
   font-family: var(--font-mono);
   margin: 0 0 8px;
+}
+
+/* segment list */
+.seg-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+.seg-label {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 0.5px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+}
+.seg-row.active .seg-label {
+  border-color: var(--border-accent);
+  background: var(--bg-accent-muted);
+  color: var(--text-accent);
+}
+.seg-row input[type="text"] {
+  font-size: 11px;
+  padding: 3px 5px;
+  font-family: var(--font-mono);
+  min-width: 0;
+}
+.seg-del {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  font-size: 13px;
+}
+.seg-del:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.seg-add {
+  width: 100%;
+  margin-bottom: 12px;
+}
+.tl-range {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.tl-range.active {
+  outline: 1px solid var(--border-accent);
+  outline-offset: -1px;
+}
+.tl-handle {
+  opacity: 0.55;
+}
+.tl-handle.active {
+  opacity: 1;
+}
+.timeline-labels #lbl-segments {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 8px;
 }

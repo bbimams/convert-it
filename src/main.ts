@@ -5,6 +5,11 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 
 type Mode = "convert" | "trim" | "filters" | "gif";
 
+interface Segment {
+  in: number;
+  out: number;
+}
+
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 
@@ -13,9 +18,15 @@ const state = {
   file: null as string | null,
   duration: 0,
   meta: "",
-  trimIn: 0,
-  trimOut: 0,
+  hasVideo: true,
+  hasAudio: true,
+  segments: [] as Segment[],
+  activeSeg: 0,
   converting: false,
+  // multi-file export queue
+  queue: [] as { args: string[]; duration: number }[],
+  queueIndex: 0,
+  queueTotal: 0,
 };
 
 // ---------- helpers ----------
@@ -41,6 +52,27 @@ function baseName(p: string): string {
 function stripExt(p: string): string {
   const i = p.lastIndexOf(".");
   return i > 0 ? p.slice(0, i) : p;
+}
+
+function sortedSegments(): Segment[] {
+  return [...state.segments].sort((a, b) => a.in - b.in);
+}
+
+function trimActive(): boolean {
+  if (state.duration === 0 || state.segments.length === 0) return false;
+  const enabled =
+    state.mode === "trim" ||
+    state.mode === "gif" ||
+    (<HTMLInputElement>$("trim-enabled")).checked;
+  if (!enabled) return false;
+  const segs = state.segments;
+  return !(segs.length === 1 && segs[0].in <= 0 && segs[0].out >= state.duration);
+}
+
+function trimmedDuration(): number {
+  return trimActive()
+    ? state.segments.reduce((acc, s) => acc + (s.out - s.in), 0)
+    : state.duration;
 }
 
 // ---------- command building ----------
@@ -75,19 +107,16 @@ function buildFilters(): string[] {
   return f;
 }
 
-function trimArgs(): string[] {
-  const enabled =
-    state.mode === "trim" ||
-    state.mode === "gif" ||
-    (<HTMLInputElement>$("trim-enabled")).checked;
-  if (!enabled || state.duration === 0) return [];
-  if (state.trimIn <= 0 && state.trimOut >= state.duration) return [];
-  return ["-ss", fmtTime(state.trimIn), "-to", fmtTime(state.trimOut)];
+interface BuiltArgs {
+  pre: string[];
+  post: string[];
+  ext: string;
 }
 
-// Builds args after "-i input"; returns [args, outExt]
-function buildArgs(): { pre: string[]; post: string[]; ext: string } {
-  const pre = trimArgs();
+// Encoding/output args for a single input pass. `seg` limits to one segment;
+// omitted = no trim (used when concat handles segmentation).
+function buildArgs(seg?: Segment): BuiltArgs {
+  const pre = seg ? ["-ss", fmtTime(seg.in), "-to", fmtTime(seg.out)] : [];
   const post: string[] = [];
 
   if (state.mode === "gif") {
@@ -107,7 +136,8 @@ function buildArgs(): { pre: string[]; post: string[]; ext: string } {
 
   if (fmt === "mp3" || fmt === "wav") {
     post.push("-vn");
-    if (fmt === "mp3") post.push("-c:a", "libmp3lame", "-b:a", (<HTMLSelectElement>$("abitrate")).value);
+    if (fmt === "mp3")
+      post.push("-c:a", "libmp3lame", "-b:a", (<HTMLSelectElement>$("abitrate")).value);
     return { pre, post, ext: fmt };
   }
 
@@ -135,14 +165,113 @@ function buildArgs(): { pre: string[]; post: string[]; ext: string } {
   return { pre, post, ext: fmt };
 }
 
-function updateCmd() {
-  const { pre, post, ext } = buildArgs();
-  const input = state.file ? baseName(state.file) : "input.mp4";
-  const out = `${stripExt(input)}_out.${ext}`;
-  const parts = ["ffmpeg", ...pre, "-i", input, ...post, out].map((p) =>
-    /[\s'";\[\]]/.test(p) ? `"${p}"` : p
+// Joins multiple segments into one output with trim+concat filter_complex.
+function buildConcatArgs(segs: Segment[], input: string, out: string): string[] {
+  const fmt = (<HTMLSelectElement>$("out-format")).value;
+  const audioOnly = fmt === "mp3" || fmt === "wav";
+  const videoOut = !audioOnly && state.hasVideo;
+  const audio =
+    state.hasAudio &&
+    (audioOnly || (<HTMLSelectElement>$("acodec")).value !== "none");
+
+  const parts: string[] = [];
+  const pads: string[] = [];
+  segs.forEach((s, i) => {
+    if (videoOut) {
+      parts.push(
+        `[0:v]trim=start=${s.in.toFixed(3)}:end=${s.out.toFixed(3)},setpts=PTS-STARTPTS[v${i}]`
+      );
+      pads.push(`[v${i}]`);
+    }
+    if (audio) {
+      parts.push(
+        `[0:a]atrim=start=${s.in.toFixed(3)}:end=${s.out.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]`
+      );
+      if (videoOut) pads[pads.length - 1] += `[a${i}]`;
+      else pads.push(`[a${i}]`);
+    }
+  });
+  parts.push(
+    `${pads.join("")}concat=n=${segs.length}:v=${videoOut ? 1 : 0}:a=${audio ? 1 : 0}${videoOut ? "[vo]" : ""}${audio ? "[ao]" : ""}`
   );
-  $("cmd").textContent = parts.join(" ");
+
+  const extra = buildFilters();
+  let mapV = "[vo]";
+  if (videoOut && extra.length) {
+    parts.push(`[vo]${extra.join(",")}[vf]`);
+    mapV = "[vf]";
+  }
+
+  const args = ["-i", input, "-filter_complex", parts.join(";")];
+  if (videoOut) {
+    args.push("-map", mapV);
+    const vcodec = (<HTMLSelectElement>$("vcodec")).value;
+    const enc = vcodec === "copy" ? "libx264" : vcodec; // copy impossible after filtering
+    args.push(
+      "-c:v", enc,
+      "-crf", (<HTMLInputElement>$("crf")).value,
+      "-preset", (<HTMLSelectElement>$("preset")).value
+    );
+  }
+  if (audio) {
+    args.push("-map", "[ao]");
+    if (fmt === "mp3") args.push("-c:a", "libmp3lame");
+    else if (fmt === "wav") args.push("-c:a", "pcm_s16le");
+    else {
+      const acodec = (<HTMLSelectElement>$("acodec")).value;
+      args.push("-c:a", acodec === "copy" ? "aac" : acodec);
+    }
+    if (fmt !== "wav") args.push("-b:a", (<HTMLSelectElement>$("abitrate")).value);
+  }
+  args.push(out);
+  return args;
+}
+
+function multiFileExport(): boolean {
+  return (
+    state.mode === "trim" &&
+    trimActive() &&
+    sortedSegments().length > 1 &&
+    (<HTMLSelectElement>$("trim-export")).value === "multi"
+  );
+}
+
+function multiSegmentJoin(): boolean {
+  return (
+    trimActive() &&
+    state.segments.length > 1 &&
+    state.mode !== "gif" &&
+    !multiFileExport()
+  );
+}
+
+function updateCmd() {
+  const input = state.file ? baseName(state.file) : "input.mp4";
+  const segs = sortedSegments();
+  let parts: string[];
+
+  if (multiSegmentJoin()) {
+    const ext = (<HTMLSelectElement>$("out-format")).value;
+    parts = [
+      "ffmpeg",
+      ...buildConcatArgs(segs, input, `${stripExt(input)}_out.${ext}`),
+    ];
+  } else if (multiFileExport()) {
+    const { pre, post, ext } = buildArgs(segs[0]);
+    parts = [
+      "ffmpeg", ...pre, "-i", input, ...post,
+      `${stripExt(input)}_seg1.${ext}`,
+      `(×${segs.length} files)`,
+    ];
+  } else {
+    const seg = trimActive() ? segs[0] : undefined;
+    const { pre, post, ext } = buildArgs(seg);
+    parts = ["ffmpeg", ...pre, "-i", input, ...post, `${stripExt(input)}_out.${ext}`];
+  }
+
+  $("cmd").textContent = parts
+    .map((p) => (/[\s'";\[\]]/.test(p) && !p.startsWith("(") ? `"${p}"` : p))
+    .join(" ");
 }
 
 // ---------- file loading ----------
@@ -172,8 +301,10 @@ async function loadFile(path: string) {
 
     state.file = path;
     state.duration = dur;
-    state.trimIn = 0;
-    state.trimOut = dur;
+    state.segments = [{ in: 0, out: dur }];
+    state.hasVideo = !!v;
+    state.hasAudio = !!a;
+    state.activeSeg = 0;
     state.meta = bits.join(" · ");
 
     const video = $<HTMLVideoElement>("video");
@@ -212,27 +343,133 @@ async function pickFile() {
   if (typeof path === "string") await loadFile(path);
 }
 
-// ---------- timeline ----------
+// ---------- timeline & segments ----------
 
 function renderTimeline() {
   if (state.duration === 0) return;
-  const inPct = (state.trimIn / state.duration) * 100;
-  const outPct = (state.trimOut / state.duration) * 100;
-  const range = $("tl-range");
-  range.style.left = `${inPct}%`;
-  range.style.right = `${100 - outPct}%`;
-  $("tl-in").style.left = `${inPct}%`;
-  $("tl-out").style.left = `${outPct}%`;
-  $("lbl-in").textContent = `in ${fmtTime(state.trimIn)}`;
-  $("lbl-out").textContent = `out ${fmtTime(state.trimOut)}`;
+  const tl = $("timeline");
+  tl.querySelectorAll(".tl-range, .tl-handle").forEach((n) => n.remove());
+
+  state.segments.forEach((seg, i) => {
+    const inPct = (seg.in / state.duration) * 100;
+    const outPct = (seg.out / state.duration) * 100;
+
+    const range = document.createElement("div");
+    range.className = "tl-range" + (i === state.activeSeg ? " active" : "");
+    range.style.left = `${inPct}%`;
+    range.style.right = `${100 - outPct}%`;
+    range.addEventListener("pointerdown", () => {
+      state.activeSeg = i;
+      renderTimeline();
+    });
+    tl.appendChild(range);
+
+    for (const side of ["in", "out"] as const) {
+      const h = document.createElement("div");
+      h.className = "tl-handle" + (i === state.activeSeg ? " active" : "");
+      h.style.left = `${side === "in" ? inPct : outPct}%`;
+      h.dataset.seg = String(i);
+      h.dataset.side = side;
+      h.title = `Segment ${i + 1} ${side}`;
+      tl.appendChild(h);
+    }
+  });
+
+  if (!tl.querySelector(".tl-playhead")) {
+    const playhead = document.createElement("div");
+    playhead.className = "tl-playhead";
+    tl.appendChild(playhead);
+  }
+
+  const segs = sortedSegments();
+  $("lbl-segments").textContent = segs
+    .map((s) => `${fmtTime(s.in)}–${fmtTime(s.out)}`)
+    .join("  ");
   $("lbl-total").textContent = fmtTime(state.duration);
-  (<HTMLInputElement>$("trim-in")).value = fmtTime(state.trimIn);
-  (<HTMLInputElement>$("trim-out")).value = fmtTime(state.trimOut);
+  renderSegList();
+}
+
+function renderSegList() {
+  const list = $("seg-list");
+  list.innerHTML = "";
+  state.segments.forEach((seg, i) => {
+    const row = document.createElement("div");
+    row.className = "seg-row" + (i === state.activeSeg ? " active" : "");
+
+    const label = document.createElement("button");
+    label.className = "seg-label";
+    label.textContent = `${i + 1}`;
+    label.setAttribute("aria-label", `Select segment ${i + 1}`);
+    label.addEventListener("click", () => {
+      state.activeSeg = i;
+      renderTimeline();
+    });
+
+    const mkField = (side: "in" | "out") => {
+      const field = document.createElement("input");
+      field.type = "text";
+      field.value = fmtTime(seg[side]);
+      field.spellcheck = false;
+      field.setAttribute("aria-label", `Segment ${i + 1} ${side}`);
+      field.addEventListener("change", () => {
+        const t = parseTime(field.value);
+        if (side === "in") seg.in = Math.min(Math.max(0, t), seg.out - 0.1);
+        else seg.out = Math.min(Math.max(seg.in + 0.1, t), state.duration);
+        renderTimeline();
+        updateCmd();
+      });
+      return field;
+    };
+
+    const del = document.createElement("button");
+    del.className = "seg-del";
+    del.innerHTML = '<i class="ti ti-x" aria-hidden="true"></i>';
+    del.setAttribute("aria-label", `Remove segment ${i + 1}`);
+    del.disabled = state.segments.length === 1;
+    del.addEventListener("click", () => {
+      state.segments.splice(i, 1);
+      state.activeSeg = Math.min(state.activeSeg, state.segments.length - 1);
+      renderTimeline();
+      updateCmd();
+    });
+
+    row.append(label, mkField("in"), mkField("out"), del);
+    list.appendChild(row);
+  });
+}
+
+function addSegment() {
+  if (state.duration === 0) return;
+  const segs = sortedSegments();
+  // place the new segment in the largest gap between existing ones
+  let start = 0;
+  let bestGap = 0;
+  let cursor = 0;
+  for (const s of segs) {
+    if (s.in - cursor > bestGap) {
+      bestGap = s.in - cursor;
+      start = cursor;
+    }
+    cursor = Math.max(cursor, s.out);
+  }
+  if (state.duration - cursor > bestGap) {
+    bestGap = state.duration - cursor;
+    start = cursor;
+  }
+  if (bestGap < 0.5) {
+    setStatus("No room for another segment — shrink existing ones first.");
+    return;
+  }
+  const len = Math.min(bestGap, Math.max(1, state.duration * 0.1));
+  state.segments.push({ in: start, out: start + len });
+  state.activeSeg = state.segments.length - 1;
+  renderTimeline();
+  updateCmd();
 }
 
 function setupTimeline() {
   const tl = $("timeline");
-  let dragging: "in" | "out" | null = null;
+  let dragging: { seg: number; side: "in" | "out" } | null = null;
 
   const posToTime = (clientX: number) => {
     const r = tl.getBoundingClientRect();
@@ -240,21 +477,24 @@ function setupTimeline() {
     return ratio * state.duration;
   };
 
-  $("tl-in").addEventListener("pointerdown", (e) => {
-    dragging = "in";
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    e.stopPropagation();
-  });
-  $("tl-out").addEventListener("pointerdown", (e) => {
-    dragging = "out";
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    e.stopPropagation();
+  tl.addEventListener("pointerdown", (e) => {
+    const t = e.target as HTMLElement;
+    if (t.classList.contains("tl-handle")) {
+      dragging = {
+        seg: Number(t.dataset.seg),
+        side: t.dataset.side as "in" | "out",
+      };
+      state.activeSeg = dragging.seg;
+      t.setPointerCapture(e.pointerId);
+      e.stopPropagation();
+    }
   });
   window.addEventListener("pointermove", (e) => {
     if (!dragging) return;
+    const seg = state.segments[dragging.seg];
     const t = posToTime(e.clientX);
-    if (dragging === "in") state.trimIn = Math.min(t, state.trimOut - 0.1);
-    else state.trimOut = Math.max(t, state.trimIn + 0.1);
+    if (dragging.side === "in") seg.in = Math.min(t, seg.out - 0.1);
+    else seg.out = Math.max(t, seg.in + 0.1);
     renderTimeline();
     updateCmd();
   });
@@ -262,27 +502,19 @@ function setupTimeline() {
 
   tl.addEventListener("click", (e) => {
     if (state.duration === 0) return;
-    const t = posToTime(e.clientX);
-    const video = $<HTMLVideoElement>("video");
-    video.currentTime = t;
+    if ((e.target as HTMLElement).classList.contains("tl-handle")) return;
+    $<HTMLVideoElement>("video").currentTime = posToTime(e.clientX);
   });
 
   const video = $<HTMLVideoElement>("video");
   video.addEventListener("timeupdate", () => {
     if (state.duration === 0) return;
-    $("tl-playhead").style.left = `${(video.currentTime / state.duration) * 100}%`;
+    const playhead = tl.querySelector<HTMLElement>(".tl-playhead");
+    if (playhead)
+      playhead.style.left = `${(video.currentTime / state.duration) * 100}%`;
   });
 
-  for (const id of ["trim-in", "trim-out"]) {
-    $(id).addEventListener("change", () => {
-      const tIn = parseTime((<HTMLInputElement>$("trim-in")).value);
-      const tOut = parseTime((<HTMLInputElement>$("trim-out")).value);
-      state.trimIn = Math.min(Math.max(0, tIn), state.duration);
-      state.trimOut = Math.min(Math.max(tIn + 0.1, tOut), state.duration);
-      renderTimeline();
-      updateCmd();
-    });
-  }
+  $("btn-add-seg").addEventListener("click", addSegment);
 }
 
 // ---------- convert ----------
@@ -293,49 +525,138 @@ function setStatus(msg: string, kind: "" | "error" | "ok" = "") {
   el.className = `status ${kind}`;
 }
 
+function beginJob() {
+  state.converting = true;
+  (<HTMLButtonElement>$("btn-convert")).disabled = true;
+  $("progress-wrap").hidden = false;
+  $("progress-fill").style.width = "0%";
+  $("progress-label").textContent = "0%";
+}
+
+function endJobs() {
+  state.converting = false;
+  state.queue = [];
+  (<HTMLButtonElement>$("btn-convert")).disabled = !state.file;
+  $("progress-wrap").hidden = true;
+}
+
+async function runNextQueued(): Promise<boolean> {
+  const job = state.queue.shift();
+  if (!job) return false;
+  state.queueIndex += 1;
+  await invoke("start_convert", { args: job.args, duration: job.duration });
+  setStatus(
+    state.queueTotal > 1
+      ? `Converting segment ${state.queueIndex}/${state.queueTotal}…`
+      : "Converting…"
+  );
+  return true;
+}
+
 async function startConvert() {
   if (!state.file || state.converting) return;
-  const { pre, post, ext } = buildArgs();
-  const defaultName = `${stripExt(baseName(state.file))}_out.${ext}`;
-  const outPath = await save({
-    defaultPath: defaultName,
-    filters: [{ name: ext, extensions: [ext] }],
-  });
-  if (!outPath) return;
 
-  const args = [...pre, "-i", state.file, ...post, outPath];
-  const effDuration =
-    trimArgs().length > 0 ? state.trimOut - state.trimIn : state.duration;
+  // preflight: impossible stream combinations
+  const fmt = (<HTMLSelectElement>$("out-format")).value;
+  if ((fmt === "mp3" || fmt === "wav") && !state.hasAudio) {
+    setStatus("Source has no audio stream — cannot export audio-only format.", "error");
+    return;
+  }
+  if (state.mode === "gif" && !state.hasVideo) {
+    setStatus("Source has no video stream — cannot export GIF.", "error");
+    return;
+  }
 
+  const segs = sortedSegments();
+
+  if (multiSegmentJoin()) {
+    const ext = (<HTMLSelectElement>$("out-format")).value;
+    const outPath = await save({
+      defaultPath: `${stripExt(baseName(state.file))}_out.${ext}`,
+      filters: [{ name: ext, extensions: [ext] }],
+    });
+    if (!outPath) return;
+    state.queue = [
+      {
+        args: buildConcatArgs(segs, state.file, outPath),
+        duration: trimmedDuration(),
+      },
+    ];
+  } else if (multiFileExport()) {
+    // one save dialog; numbered siblings derive from it
+    const { ext } = buildArgs(segs[0]);
+    const outPath = await save({
+      defaultPath: `${stripExt(baseName(state.file))}_seg1.${ext}`,
+      filters: [{ name: ext, extensions: [ext] }],
+    });
+    if (!outPath) return;
+    const base = outPath.replace(/(_seg1)?\.[^.]+$/, "");
+    state.queue = segs.map((seg, i) => {
+      const { pre, post } = buildArgs(seg);
+      return {
+        args: [...pre, "-i", state.file!, ...post, `${base}_seg${i + 1}.${ext}`],
+        duration: seg.out - seg.in,
+      };
+    });
+  } else {
+    const seg = trimActive() ? segs[0] : undefined;
+    const { pre, post, ext } = buildArgs(seg);
+    const outPath = await save({
+      defaultPath: `${stripExt(baseName(state.file))}_out.${ext}`,
+      filters: [{ name: ext, extensions: [ext] }],
+    });
+    if (!outPath) return;
+    state.queue = [
+      {
+        args: [...pre, "-i", state.file, ...post, outPath],
+        duration: seg ? seg.out - seg.in : state.duration,
+      },
+    ];
+  }
+
+  state.queueTotal = state.queue.length;
+  state.queueIndex = 0;
   try {
-    await invoke("start_convert", { args, duration: effDuration });
-    state.converting = true;
-    (<HTMLButtonElement>$("btn-convert")).disabled = true;
-    $("progress-wrap").hidden = false;
-    $("progress-fill").style.width = "0%";
-    $("progress-label").textContent = "0%";
-    setStatus("Converting…");
+    beginJob();
+    await runNextQueued();
   } catch (e) {
+    endJobs();
     setStatus(String(e), "error");
   }
 }
 
 function setupEvents() {
   listen<{ ratio: number; out_time: number }>("convert-progress", (e) => {
-    const pct = Math.round(e.payload.ratio * 100);
+    const done = state.queueIndex - 1;
+    const overall = (done + e.payload.ratio) / Math.max(1, state.queueTotal);
+    const pct = Math.round(overall * 100);
     $("progress-fill").style.width = `${pct}%`;
     $("progress-label").textContent = `${pct}% · ${fmtTime(e.payload.out_time)}`;
   });
 
   listen<{ ok: boolean; cancelled: boolean; message: string }>(
     "convert-done",
-    (e) => {
-      state.converting = false;
-      (<HTMLButtonElement>$("btn-convert")).disabled = !state.file;
-      $("progress-wrap").hidden = true;
-      if (e.payload.ok) setStatus("Done.", "ok");
-      else if (e.payload.cancelled) setStatus("Cancelled.");
-      else setStatus(e.payload.message || "Conversion failed.", "error");
+    async (e) => {
+      if (e.payload.cancelled) {
+        endJobs();
+        setStatus("Cancelled.");
+        return;
+      }
+      if (!e.payload.ok) {
+        endJobs();
+        setStatus(e.payload.message || "Conversion failed.", "error");
+        return;
+      }
+      try {
+        if (await runNextQueued()) return;
+      } catch (err) {
+        endJobs();
+        setStatus(String(err), "error");
+        return;
+      }
+      const n = state.queueTotal;
+      endJobs();
+      setStatus(n > 1 ? `Done — ${n} files.` : "Done.", "ok");
     }
   );
 }
@@ -361,7 +682,8 @@ function setupUI() {
       `[data-panel="${state.mode}"]`
     );
     const hasAdvanced = !!panel?.querySelector(".adv-only");
-    (document.querySelector(".seg") as HTMLElement).hidden = !hasAdvanced;
+    const seg = document.querySelector(".seg") as HTMLElement;
+    seg.style.display = hasAdvanced ? "" : "none";
   };
   updateSegVisibility();
 

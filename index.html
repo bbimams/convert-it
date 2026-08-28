@@ -17,8 +17,7 @@
     <div id="app">
       <header class="topbar">
         <div class="brand">
-          <i class="ti ti-disc" aria-hidden="true"></i>
-          <p>convert it</p>
+          <img src="/src/assets/convert-it-logo.png" alt="Convert It" class="brand-logo" />
         </div>
         <div class="topbar-actions">
           <div class="seg">
@@ -57,16 +56,10 @@
           </div>
 
           <div class="timeline-wrap" id="timeline-wrap" hidden>
-            <div class="timeline" id="timeline">
-              <div class="tl-range" id="tl-range"></div>
-              <div class="tl-handle" id="tl-in" title="Trim in"></div>
-              <div class="tl-handle" id="tl-out" title="Trim out"></div>
-              <div class="tl-playhead" id="tl-playhead"></div>
-            </div>
+            <div class="timeline" id="timeline"></div>
             <div class="timeline-labels">
               <span>00:00:00</span>
-              <span id="lbl-in">in 00:00:00</span>
-              <span id="lbl-out">out 00:00:00</span>
+              <span id="lbl-segments"></span>
               <span id="lbl-total">00:00:00</span>
             </div>
           </div>
@@ -150,18 +143,21 @@
           </section>
 
           <section data-panel="trim" hidden>
-            <p class="side-title">Trim</p>
+            <p class="side-title">Segments</p>
+            <div id="seg-list"></div>
+            <button id="btn-add-seg" class="btn-ghost seg-add">
+              <i class="ti ti-plus" aria-hidden="true"></i> Add segment
+            </button>
             <label class="field">
-              <span>In</span>
-              <input type="text" id="trim-in" value="00:00:00" spellcheck="false" />
-            </label>
-            <label class="field">
-              <span>Out</span>
-              <input type="text" id="trim-out" value="00:00:00" spellcheck="false" />
+              <span>Export as</span>
+              <select id="trim-export">
+                <option value="single">Single file (joined)</option>
+                <option value="multi">One file per segment</option>
+              </select>
             </label>
             <label class="check">
               <input type="checkbox" id="trim-enabled" />
-              <span>Apply trim</span>
+              <span>Apply trim in other tabs</span>
             </label>
             <label class="check adv-only">
               <input type="checkbox" id="trim-copy" />
