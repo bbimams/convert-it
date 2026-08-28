@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/src/assets/tauri.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Convert It</title>
+    <link
+      rel="stylesheet"
+      href="/node_modules/@tabler/icons-webfont/dist/tabler-icons.min.css"
+    />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <i class="ti ti-disc" aria-hidden="true"></i>
+          <p>convert it</p>
+        </div>
+        <div class="topbar-actions">
+          <div class="seg">
+            <button class="seg-btn active" id="btn-simple">Simple</button>
+            <button class="seg-btn" id="btn-advanced">Advanced</button>
+          </div>
+          <button id="btn-convert" class="btn-accent" disabled>Convert</button>
+        </div>
+      </header>
+
+      <div class="layout">
+        <nav class="mode-nav" aria-label="Modes">
+          <button class="mode-btn active" data-mode="convert" aria-label="Convert">
+            <i class="ti ti-repeat" aria-hidden="true"></i><span>Convert</span>
+          </button>
+          <button class="mode-btn" data-mode="trim" aria-label="Trim">
+            <i class="ti ti-scissors" aria-hidden="true"></i><span>Trim</span>
+          </button>
+          <button class="mode-btn" data-mode="filters" aria-label="Filters">
+            <i class="ti ti-adjustments-horizontal" aria-hidden="true"></i><span>Filters</span>
+          </button>
+          <button class="mode-btn" data-mode="gif" aria-label="GIF export">
+            <i class="ti ti-photo" aria-hidden="true"></i><span>GIF</span>
+          </button>
+        </nav>
+
+        <main class="center">
+          <div class="preview" id="preview">
+            <div class="preview-empty" id="preview-empty">
+              <i class="ti ti-video-plus" aria-hidden="true"></i>
+              <p>Open a video or audio file</p>
+              <button id="btn-open" class="btn-accent">Open file…</button>
+            </div>
+            <video id="video" hidden></video>
+            <span class="preview-time" id="preview-duration" hidden>00:00:00</span>
+          </div>
+
+          <div class="timeline-wrap" id="timeline-wrap" hidden>
+            <div class="timeline" id="timeline">
+              <div class="tl-range" id="tl-range"></div>
+              <div class="tl-handle" id="tl-in" title="Trim in"></div>
+              <div class="tl-handle" id="tl-out" title="Trim out"></div>
+              <div class="tl-playhead" id="tl-playhead"></div>
+            </div>
+            <div class="timeline-labels">
+              <span>00:00:00</span>
+              <span id="lbl-in">in 00:00:00</span>
+              <span id="lbl-out">out 00:00:00</span>
+              <span id="lbl-total">00:00:00</span>
+            </div>
+          </div>
+
+          <div class="cmd-box">
+            <div class="cmd-head">
+              <i class="ti ti-terminal-2" aria-hidden="true"></i>
+              <span>command preview</span>
+            </div>
+            <p id="cmd" class="cmd-text">ffmpeg …</p>
+          </div>
+
+          <div class="progress-wrap" id="progress-wrap" hidden>
+            <div class="progress-track">
+              <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <div class="progress-meta">
+              <span id="progress-label">0%</span>
+              <button id="btn-cancel" class="btn-ghost">Cancel</button>
+            </div>
+          </div>
+
+          <p class="status" id="status"></p>
+        </main>
+
+        <aside class="side">
+          <section data-panel="convert">
+            <p class="side-title">Output</p>
+            <label class="field">
+              <span>Format</span>
+              <select id="out-format">
+                <option value="mp4">mp4</option>
+                <option value="mkv">mkv</option>
+                <option value="webm">webm</option>
+                <option value="mov">mov</option>
+                <option value="mp3">mp3 (audio)</option>
+                <option value="wav">wav (audio)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Video codec</span>
+              <select id="vcodec">
+                <option value="libx264">h.264</option>
+                <option value="libx265">h.265</option>
+                <option value="libvpx-vp9">vp9</option>
+                <option value="copy">copy</option>
+              </select>
+            </label>
+            <label class="field adv-only">
+              <span>CRF <b id="crf-val">23</b></span>
+              <input type="range" id="crf" min="0" max="51" value="23" />
+            </label>
+            <label class="field adv-only">
+              <span>Preset</span>
+              <select id="preset">
+                <option>ultrafast</option>
+                <option>fast</option>
+                <option selected>medium</option>
+                <option>slow</option>
+                <option>veryslow</option>
+              </select>
+            </label>
+            <label class="field adv-only">
+              <span>Audio codec</span>
+              <select id="acodec">
+                <option value="aac">aac</option>
+                <option value="libopus">opus</option>
+                <option value="copy">copy</option>
+                <option value="none">none</option>
+              </select>
+            </label>
+            <label class="field adv-only">
+              <span>Audio bitrate</span>
+              <select id="abitrate">
+                <option>128k</option>
+                <option selected>192k</option>
+                <option>256k</option>
+                <option>320k</option>
+              </select>
+            </label>
+          </section>
+
+          <section data-panel="trim" hidden>
+            <p class="side-title">Trim</p>
+            <label class="field">
+              <span>In</span>
+              <input type="text" id="trim-in" value="00:00:00" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span>Out</span>
+              <input type="text" id="trim-out" value="00:00:00" spellcheck="false" />
+            </label>
+            <label class="check">
+              <input type="checkbox" id="trim-enabled" />
+              <span>Apply trim</span>
+            </label>
+            <label class="check adv-only">
+              <input type="checkbox" id="trim-copy" />
+              <span>Stream copy (fast, keyframe cuts)</span>
+            </label>
+          </section>
+
+          <section data-panel="filters" hidden>
+            <p class="side-title">Filter stack</p>
+
+            <div class="filter-row">
+              <i class="ti ti-crop" aria-hidden="true"></i>
+              <span class="filter-name">Crop</span>
+              <input type="checkbox" class="filter-toggle" id="f-crop" />
+            </div>
+            <div class="filter-opts adv-only" data-for="f-crop">
+              <input type="text" id="crop-w" value="1280" aria-label="Crop width" />
+              <input type="text" id="crop-h" value="720" aria-label="Crop height" />
+            </div>
+
+            <div class="filter-row">
+              <i class="ti ti-arrows-maximize" aria-hidden="true"></i>
+              <span class="filter-name">Scale</span>
+              <input type="checkbox" class="filter-toggle" id="f-scale" />
+            </div>
+            <div class="filter-opts" data-for="f-scale">
+              <input type="text" id="scale-w" value="1920" aria-label="Scale width" />
+              <input type="text" id="scale-h" value="-2" aria-label="Scale height" />
+            </div>
+
+            <div class="filter-row">
+              <i class="ti ti-activity" aria-hidden="true"></i>
+              <span class="filter-name">Denoise</span>
+              <input type="checkbox" class="filter-toggle" id="f-denoise" />
+            </div>
+
+            <div class="filter-row last">
+              <i class="ti ti-stamp" aria-hidden="true"></i>
+              <span class="filter-name">Watermark</span>
+              <input type="checkbox" class="filter-toggle" id="f-watermark" />
+            </div>
+            <div class="filter-opts stack" data-for="f-watermark">
+              <input type="text" id="wm-text" value="convert it" aria-label="Watermark text" />
+              <select id="wm-pos">
+                <option value="br">Bottom right</option>
+                <option value="bl">Bottom left</option>
+                <option value="tr">Top right</option>
+                <option value="tl">Top left</option>
+              </select>
+              <label class="mini">Opacity <b id="wm-op-val">60</b>%</label>
+              <input type="range" id="wm-opacity" min="0" max="100" value="60" />
+            </div>
+          </section>
+
+          <section data-panel="gif" hidden>
+            <p class="side-title">GIF export</p>
+            <label class="field">
+              <span>FPS</span>
+              <select id="gif-fps">
+                <option>10</option>
+                <option selected>15</option>
+                <option>24</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Width</span>
+              <input type="text" id="gif-width" value="480" />
+            </label>
+            <label class="check adv-only">
+              <input type="checkbox" id="gif-palette" checked />
+              <span>High quality palette</span>
+            </label>
+          </section>
+
+          <div class="side-file" id="side-file" hidden>
+            <p class="side-title">Source</p>
+            <p class="file-name" id="file-name"></p>
+            <p class="file-meta" id="file-meta"></p>
+            <button id="btn-open-2" class="btn-ghost">Change file…</button>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </body>
+</html>
