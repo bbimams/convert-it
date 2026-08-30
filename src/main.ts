@@ -36,6 +36,7 @@ const state = {
   queueIndex: 0,
   queueTotal: 0,
   completedOutputs: [] as string[],
+  loadToken: 0,
 };
 
 // ---------- helpers ----------
@@ -307,8 +308,21 @@ interface ProbeInfo {
 }
 
 async function loadFile(path: string) {
+  const video = $<HTMLVideoElement>("video");
+  const loadToken = ++state.loadToken;
+  setStatus("Reading media information…");
+  (<HTMLButtonElement>$("btn-convert")).disabled = true;
+
+  // Stop the WebView from decoding the previous file while ffprobe reads the
+  // new one. Metadata-only preload avoids buffering a large video on open.
+  video.pause();
+  video.removeAttribute("src");
+  video.load();
+
   try {
     const info = await invoke<ProbeInfo>("probe_media", { path });
+    if (loadToken !== state.loadToken) return;
+
     const dur = Number(info.format?.duration ?? 0);
     const streams = info.streams ?? [];
     const v = streams.find((s) => s.codec_type === "video");
@@ -326,7 +340,7 @@ async function loadFile(path: string) {
     state.activeSeg = 0;
     state.meta = bits.join(" · ");
 
-    const video = $<HTMLVideoElement>("video");
+    video.preload = "metadata";
     video.src = convertFileSrc(path);
     video.controls = true;
     video.hidden = false;
@@ -342,6 +356,7 @@ async function loadFile(path: string) {
     renderTimeline();
     updateCmd();
   } catch (e) {
+    if (loadToken !== state.loadToken) return;
     setStatus(String(e), "error");
   }
 }

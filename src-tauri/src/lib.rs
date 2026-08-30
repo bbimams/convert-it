@@ -10,6 +10,7 @@ use tauri_plugin_opener::OpenerExt;
 struct ConvertState {
     child: Option<Child>,
     probed_input: Option<String>,
+    probe_generation: u64,
     completed_outputs: Vec<PathBuf>,
 }
 
@@ -70,11 +71,11 @@ fn require_bin(name: &str) -> Result<PathBuf, String> {
 /// so the WebView can preview it. Scope is per-file at runtime instead of a
 /// blanket `**` filesystem grant, and the grant happens only after ffprobe
 /// confirms the path is readable media.
-#[tauri::command]
-fn probe_media(
+fn probe_media_blocking(
     app: AppHandle,
-    state: State<Arc<Mutex<ConvertState>>>,
+    state: Arc<Mutex<ConvertState>>,
     path: String,
+    generation: u64,
 ) -> Result<serde_json::Value, String> {
     let out = Command::new(require_bin("ffprobe")?)
         .args([
@@ -82,8 +83,8 @@ fn probe_media(
             "error",
             "-print_format",
             "json",
-            "-show_format",
-            "-show_streams",
+            "-show_entries",
+            "format=duration:stream=codec_type,codec_name,width,height",
             &path,
         ])
         .output()
@@ -92,11 +93,32 @@ fn probe_media(
         return Err(String::from_utf8_lossy(&out.stderr).into_owned());
     }
     let info: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
+    let mut guard = state.lock();
+    if guard.probe_generation != generation {
+        return Err("media probe superseded by a newer file".into());
+    }
     app.asset_protocol_scope()
         .allow_file(&path)
         .map_err(|e| e.to_string())?;
-    state.inner().lock().probed_input = Some(path);
+    guard.probed_input = Some(path);
     Ok(info)
+}
+
+#[tauri::command]
+async fn probe_media(
+    app: AppHandle,
+    state: State<'_, Arc<Mutex<ConvertState>>>,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    let state = state.inner().clone();
+    let generation = {
+        let mut guard = state.lock();
+        guard.probe_generation = guard.probe_generation.wrapping_add(1);
+        guard.probe_generation
+    };
+    tauri::async_runtime::spawn_blocking(move || probe_media_blocking(app, state, path, generation))
+        .await
+        .map_err(|e| format!("failed to join ffprobe task: {e}"))?
 }
 
 /// Returns which optional ffmpeg filters are available (e.g. drawtext needs freetype).
@@ -356,6 +378,7 @@ mod tests {
             child: None,
             probed_input: None,
             completed_outputs: vec![output.clone()],
+            probe_generation: 0,
         }));
 
         assert_eq!(
@@ -376,6 +399,7 @@ pub fn run() {
                 child: None,
                 probed_input: None,
                 completed_outputs: Vec::new(),
+                probe_generation: 0,
             })));
             Ok(())
         })

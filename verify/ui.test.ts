@@ -21,6 +21,7 @@ interface InvokeCall {
 const invoked: InvokeCall[] = [];
 const openedOutputs: string[] = [];
 const shownOutputs: string[] = [];
+let probeResponse: Promise<unknown> | undefined;
 let doneListener: ((e: { payload: unknown }) => void) | undefined;
 // flush pending microtasks from async click handlers (no wall-clock timers)
 const flush = async () => {
@@ -31,7 +32,8 @@ mock.module("@tauri-apps/api/core", () => ({
   convertFileSrc: (p: string) => `asset://${p}`,
   invoke: async (cmd: string, args?: InvokeCall["args"]) => {
     invoked.push({ cmd, args });
-    if (cmd === "probe_media")
+    if (cmd === "probe_media") {
+      if (probeResponse) return probeResponse;
       return {
         format: { duration: "10.0" },
         streams: [
@@ -39,6 +41,7 @@ mock.module("@tauri-apps/api/core", () => ({
           { codec_type: "audio", codec_name: "aac" },
         ],
       };
+    }
     if (cmd === "ffmpeg_capabilities")
       return ["hqdn3d", "palettegen", "paletteuse"];
     if (cmd === "open_output" && args?.path) openedOutputs.push(args.path);
@@ -90,6 +93,33 @@ test("Trim, Filters, GIF tabs show the toggle", () => {
   }
   click(modeBtn("convert"));
   expect(visible(seg())).toBe(false);
+});
+
+test("file probing keeps the UI responsive and preview metadata-only", async () => {
+  const { promise, resolve } = Promise.withResolvers<unknown>();
+  probeResponse = promise;
+
+  click("#btn-open");
+  await flush();
+
+  expect(document.getElementById("status")!.textContent).toBe(
+    "Reading media information…"
+  );
+  expect((document.getElementById("btn-convert") as HTMLButtonElement).disabled).toBe(true);
+
+  resolve({
+    format: { duration: "10.0" },
+    streams: [
+      { codec_type: "video", codec_name: "h264", width: 640, height: 360 },
+      { codec_type: "audio", codec_name: "aac" },
+    ],
+  });
+  await flush();
+  probeResponse = undefined;
+
+  const video = document.getElementById("video") as HTMLVideoElement;
+  expect(video.preload).toBe("metadata");
+  expect(video.src).toContain("asset:///tmp/mock-input.mp4");
 });
 
 test("loading a file creates one full-length segment", async () => {
