@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
-const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const VERSION_PATTERN = /^0\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 function run(command: string, args: string[], capture = false): string {
   const result = spawnSync(command, args, {
@@ -44,7 +44,7 @@ function setCargoVersion(path: string, version: string): void {
 function validateVersion(version: string): void {
   if (!VERSION_PATTERN.test(version)) {
     throw new Error(
-      `Invalid version "${version}". Expected MAJOR.MINOR.PATCH, optionally with a prerelease suffix.`,
+      `Invalid version "${version}". Convert It uses ZeroVer: expected 0.MINOR.PATCH, optionally with a prerelease suffix. See https://0ver.org/.`,
     );
   }
 }
@@ -101,7 +101,10 @@ function publish(version: string): void {
     "src-tauri/Cargo.lock",
     "src-tauri/tauri.conf.json",
   ]);
-  run("git", ["commit", "-m", `chore(release): ${tag}`]);
+  const hasVersionChanges = run("git", ["diff", "--cached", "--name-only"], true) !== "";
+  if (hasVersionChanges) {
+    run("git", ["commit", "-m", `chore(release): ${tag}`]);
+  }
   run("git", ["tag", "-a", tag, "-m", `Convert It ${tag}`]);
   run("git", ["push", "origin", "HEAD"]);
   run("git", ["push", "origin", tag]);

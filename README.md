@@ -113,7 +113,7 @@ Production bundles created locally are written below `src-tauri/target/release/b
 
 ## Releasing
 
-The release contract is a version tag named `vMAJOR.MINOR.PATCH`. A pushed tag starts `.github/workflows/release.yml`, which validates the version and builds installers on macOS Apple Silicon, macOS Intel, Windows x64, and Linux x64. All successful jobs upload their artifacts to one GitHub Release.
+Convert It follows [ZeroVer](https://0ver.org/): the major version remains `0`. Release tags use `v0.MINOR.PATCH`, optionally followed by a prerelease suffix. A pushed tag starts `.github/workflows/release.yml`, which validates the version and builds installers on macOS Apple Silicon, macOS Intel, Windows x64, and Linux x64. All successful jobs upload their artifacts to one GitHub Release.
 
 ### One-command release
 
@@ -133,7 +133,7 @@ make release VERSION=0.2.0
 
 The command:
 
-1. Validates the semantic version and confirms the tag does not already exist.
+1. Validates the ZeroVer version and confirms the tag does not already exist.
 2. Updates `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
 3. Refreshes and validates lockfiles.
 4. Runs the UI suite, frontend production build, and Rust check.
@@ -194,7 +194,7 @@ sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchel
 
 ### A release did not start
 
-Check that the pushed tag has the exact form `v1.2.3` or a supported prerelease form such as `v1.2.3-rc.1`, and that the three application version files match the tag without the leading `v`.
+Check that the pushed tag has the exact ZeroVer form `v0.MINOR.PATCH` or a supported prerelease form such as `v0.2.0-rc.1`, and that the three application version files match the tag without the leading `v`.
 
 ## License
 
