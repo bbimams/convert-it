@@ -5,10 +5,12 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 
 struct ConvertState {
     child: Option<Child>,
     probed_input: Option<String>,
+    completed_outputs: Vec<PathBuf>,
 }
 
 /// Resolves a binary from the caller's PATH and common package-manager
@@ -257,6 +259,9 @@ fn start_convert(
                     .collect::<Vec<_>>()
                     .join("\n")
             };
+            if ok {
+                slot.lock().completed_outputs.push(PathBuf::from(&output));
+            }
             let _ = app.emit(
                 "convert-done",
                 DonePayload {
@@ -269,6 +274,56 @@ fn start_convert(
     });
 
     Ok(())
+}
+#[tauri::command]
+fn reset_completed_outputs(state: State<Arc<Mutex<ConvertState>>>) {
+    state.inner().lock().completed_outputs.clear();
+}
+
+fn require_completed_output_from(
+    state: &Arc<Mutex<ConvertState>>,
+    path: String,
+) -> Result<PathBuf, String> {
+    let output = PathBuf::from(path);
+    let guard = state.lock();
+    if !guard.completed_outputs.contains(&output) {
+        return Err("output must be created by the completed conversion".into());
+    }
+    if !output.is_file() {
+        return Err("output file no longer exists".into());
+    }
+    Ok(output)
+}
+
+fn require_completed_output(
+    state: State<Arc<Mutex<ConvertState>>>,
+    path: String,
+) -> Result<PathBuf, String> {
+    require_completed_output_from(state.inner(), path)
+}
+
+#[tauri::command]
+fn open_output(
+    app: AppHandle,
+    state: State<Arc<Mutex<ConvertState>>>,
+    path: String,
+) -> Result<(), String> {
+    let output = require_completed_output(state, path)?;
+    app.opener()
+        .open_path(output.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn show_output(
+    app: AppHandle,
+    state: State<Arc<Mutex<ConvertState>>>,
+    path: String,
+) -> Result<(), String> {
+    let output = require_completed_output(state, path)?;
+    app.opener()
+        .reveal_item_in_dir(output)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -288,14 +343,39 @@ fn cancel_convert(app: AppHandle, state: State<Arc<Mutex<ConvertState>>>) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completed_output_requires_authorized_existing_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("converted.mp4");
+        std::fs::write(&output, b"media").unwrap();
+        let state = Arc::new(Mutex::new(ConvertState {
+            child: None,
+            probed_input: None,
+            completed_outputs: vec![output.clone()],
+        }));
+
+        assert_eq!(
+            require_completed_output_from(&state, output.to_string_lossy().into_owned()).unwrap(),
+            output
+        );
+        assert!(require_completed_output_from(&state, "/tmp/not-converted.mp4".into()).is_err());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             app.manage(Arc::new(Mutex::new(ConvertState {
                 child: None,
                 probed_input: None,
+                completed_outputs: Vec::new(),
             })));
             Ok(())
         })
@@ -303,7 +383,10 @@ pub fn run() {
             probe_media,
             ffmpeg_capabilities,
             start_convert,
-            cancel_convert
+            reset_completed_outputs,
+            cancel_convert,
+            open_output,
+            show_output
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

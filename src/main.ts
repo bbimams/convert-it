@@ -35,6 +35,7 @@ const state = {
   queue: [] as QueuedJob[],
   queueIndex: 0,
   queueTotal: 0,
+  completedOutputs: [] as string[],
 };
 
 // ---------- helpers ----------
@@ -559,10 +560,27 @@ function setStatus(msg: string, kind: "" | "error" | "ok" = "") {
 
 function beginJob() {
   state.converting = true;
+  state.completedOutputs = state.queue.map((job) => job.output);
+  const completionDialog = $<HTMLDialogElement>("completion-dialog");
+  if (completionDialog.open) completionDialog.close();
   (<HTMLButtonElement>$("btn-convert")).disabled = true;
   $("progress-wrap").hidden = false;
   $("progress-fill").style.width = "0%";
   $("progress-label").textContent = "0%";
+}
+
+function showCompletionDialog() {
+  const outputs = state.completedOutputs;
+  const firstOutput = outputs[0];
+  if (!firstOutput) return;
+
+  $("completion-message").textContent =
+    outputs.length > 1
+      ? `${outputs.length} files were converted successfully.`
+      : "Your file was converted successfully.";
+  $("completion-path").textContent =
+    outputs.length > 1 ? `${firstOutput} (+${outputs.length - 1} more)` : firstOutput;
+  $<HTMLDialogElement>("completion-dialog").showModal();
 }
 
 function endJobs() {
@@ -670,6 +688,7 @@ async function startConvert() {
   state.queueTotal = state.queue.length;
   state.queueIndex = 0;
   try {
+    await invoke("reset_completed_outputs");
     beginJob();
     await runNextQueued();
   } catch (e) {
@@ -707,9 +726,9 @@ function setupEvents() {
         setStatus(String(err), "error");
         return;
       }
-      const n = state.queueTotal;
       endJobs();
-      setStatus(n > 1 ? `Done — ${n} files.` : "Done.", "ok");
+      setStatus("");
+      showCompletionDialog();
     }
   );
 }
@@ -786,6 +805,29 @@ function setupUI() {
   $("btn-open-2").addEventListener("click", pickFile);
   $("btn-convert").addEventListener("click", startConvert);
   $("btn-cancel").addEventListener("click", () => invoke("cancel_convert"));
+
+  const completionDialog = $<HTMLDialogElement>("completion-dialog");
+  completionDialog.addEventListener("cancel", () => completionDialog.close());
+  $("btn-open-output").addEventListener("click", async () => {
+    const output = state.completedOutputs[0];
+    if (!output) return;
+    try {
+      await invoke("open_output", { path: output });
+      completionDialog.close();
+    } catch (e) {
+      setStatus(String(e), "error");
+    }
+  });
+  $("btn-show-output").addEventListener("click", async () => {
+    const output = state.completedOutputs[0];
+    if (!output) return;
+    try {
+      await invoke("show_output", { path: output });
+      completionDialog.close();
+    } catch (e) {
+      setStatus(String(e), "error");
+    }
+  });
 
   // native file drag & drop
   getCurrentWebview().onDragDropEvent((e) => {

@@ -14,12 +14,14 @@ interface InvokeCall {
         pre?: string[];
         post?: string[];
         duration?: number;
+        path?: string;
       }
     | undefined;
 }
 const invoked: InvokeCall[] = [];
+const openedOutputs: string[] = [];
+const shownOutputs: string[] = [];
 let doneListener: ((e: { payload: unknown }) => void) | undefined;
-
 // flush pending microtasks from async click handlers (no wall-clock timers)
 const flush = async () => {
   for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -39,6 +41,8 @@ mock.module("@tauri-apps/api/core", () => ({
       };
     if (cmd === "ffmpeg_capabilities")
       return ["hqdn3d", "palettegen", "paletteuse"];
+    if (cmd === "open_output" && args?.path) openedOutputs.push(args.path);
+    if (cmd === "show_output" && args?.path) shownOutputs.push(args.path);
     return null;
   },
 }));
@@ -146,6 +150,8 @@ test("multi-file export previews per-segment command", () => {
 
 test("multi-file convert queues both segments with numbered outputs", async () => {
   invoked.length = 0;
+  openedOutputs.length = 0;
+  shownOutputs.length = 0;
   click("#btn-convert");
   await flush();
   expect(startCalls().length).toBe(1);
@@ -163,7 +169,22 @@ test("multi-file convert queues both segments with numbered outputs", async () =
   // finishing job 2 ends the queue
   doneListener!({ payload: { ok: true, cancelled: false, message: "" } });
   await flush();
-  expect(document.getElementById("status")!.textContent).toContain("2 files");
+  const dialog = document.getElementById("completion-dialog") as HTMLDialogElement;
+  expect(dialog.open).toBe(true);
+  expect(document.getElementById("completion-message")!.textContent).toContain("2 files");
+  expect(document.getElementById("completion-path")!.textContent).toContain("mock-out_seg1.mp4");
+});
+
+test("completion popup opens or reveals the first output", async () => {
+  click("#btn-open-output");
+  await flush();
+  expect(openedOutputs).toEqual(["/tmp/mock-out_seg1.mp4"]);
+
+  const dialog = document.getElementById("completion-dialog") as HTMLDialogElement;
+  dialog.showModal();
+  click("#btn-show-output");
+  await flush();
+  expect(shownOutputs).toEqual(["/tmp/mock-out_seg1.mp4"]);
 });
 
 test("cancellation invokes cancel and stops the queue", async () => {

@@ -241,5 +241,20 @@
         </aside>
       </div>
     </div>
+
+    <dialog id="completion-dialog" class="completion-dialog" aria-labelledby="completion-title">
+      <div class="completion-icon" aria-hidden="true">
+        <i class="ti ti-check"></i>
+      </div>
+      <div class="completion-copy">
+        <h2 id="completion-title">Conversion complete</h2>
+        <p id="completion-message"></p>
+        <p id="completion-path" class="completion-path"></p>
+      </div>
+      <div class="completion-actions">
+        <button id="btn-show-output" class="btn-ghost">Show in Folder</button>
+        <button id="btn-open-output" class="btn-accent">Open</button>
+      </div>
+    </dialog>
   </body>
 </html>

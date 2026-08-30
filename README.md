@@ -72,7 +72,7 @@ Download the installer for your operating system from the repository's **Release
 Clone the repository, then install the locked dependencies:
 
 ```sh
-git clone <repository-url>
+git clone https://github.com/bbimams/convert-it.git
 cd convert-it
 make install
 ```
