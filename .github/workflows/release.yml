@@ -1,0 +1,130 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v-prefixed tag to build, for example v0.2.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify synchronized version
+        shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          test "$(bun -e \"console.log(require('./package.json').version)\")" = "$VERSION"
+          test "$(bun -e \"console.log(require('./src-tauri/tauri.conf.json').version)\")" = "$VERSION"
+          grep -q "^version = \"$VERSION\"$" src-tauri/Cargo.toml
+
+      - name: Run frontend verification
+        run: bun test
+
+      - name: Build frontend
+        run: bun run build
+
+  publish:
+    name: Build ${{ matrix.name }}
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            platform: macos-latest
+            args: --target aarch64-apple-darwin
+          - name: macOS Intel
+            platform: macos-13
+            args: --target x86_64-apple-darwin
+          - name: Linux x64
+            platform: ubuntu-22.04
+            args: ""
+          - name: Windows x64
+            platform: windows-latest
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ startsWith(matrix.platform, 'macos-') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build and publish installers
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ needs.validate.outputs.tag }}
+          releaseName: Convert It v__VERSION__
+          releaseBody: Download the installer for your operating system from the assets below. FFmpeg and ffprobe must be installed separately and available on PATH.
+          generateReleaseNotes: true
+          releaseDraft: false
+          prerelease: ${{ contains(needs.validate.outputs.version, '-') }}
+          uploadUpdaterJson: false
+          assetNamePattern: convert-it_[version]_[platform]_[arch][setup][ext]
+          args: ${{ matrix.args }}

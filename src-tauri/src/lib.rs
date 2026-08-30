@@ -1,8 +1,8 @@
+use parking_lot::Mutex;
 use serde::Serialize;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use parking_lot::Mutex;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -11,26 +11,56 @@ struct ConvertState {
     probed_input: Option<String>,
 }
 
-/// Resolves a binary from the dirs a GUI app can rely on (Finder launches get
-/// a minimal PATH) plus the caller's PATH for CLI launches and exotic
-/// installs. `None` when the binary can't be found anywhere.
+/// Resolves a binary from the caller's PATH and common package-manager
+/// locations. GUI launches on macOS and Windows often inherit a minimal PATH.
 fn find_bin(name: &str) -> Option<PathBuf> {
-    let mut dirs = vec![
-        "/opt/homebrew/bin".to_string(),
-        "/usr/local/bin".to_string(),
-        "/usr/bin".to_string(),
-    ];
-    if let Ok(path) = std::env::var("PATH") {
-        dirs.extend(std::env::split_paths(&path).map(|d| d.to_string_lossy().into_owned()));
+    #[cfg(target_os = "windows")]
+    const SUFFIX: &str = ".exe";
+    #[cfg(not(target_os = "windows"))]
+    const SUFFIX: &str = "";
+
+    let executable = format!("{name}{SUFFIX}");
+    let mut dirs = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    dirs.extend([
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/bin"),
+    ]);
+
+    #[cfg(target_os = "windows")]
+    {
+        for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(root) = std::env::var_os(variable) {
+                dirs.push(PathBuf::from(root).join("FFmpeg").join("bin"));
+            }
+        }
+        if let Some(program_data) = std::env::var_os("ProgramData") {
+            dirs.push(PathBuf::from(program_data).join("chocolatey").join("bin"));
+        }
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            dirs.push(
+                PathBuf::from(local_app_data)
+                    .join("Microsoft")
+                    .join("WinGet")
+                    .join("Links"),
+            );
+        }
     }
+
+    if let Some(path) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path));
+    }
+
     dirs.into_iter()
-        .map(|d| std::path::Path::new(&d).join(name))
-        .find(|p| p.is_file())
+        .map(|directory| directory.join(&executable))
+        .find(|path| path.is_file())
 }
 
 fn require_bin(name: &str) -> Result<PathBuf, String> {
     find_bin(name).ok_or_else(|| {
-        format!("{name} not found — install FFmpeg (e.g. `brew install ffmpeg`)")
+        format!("{name} not found — install FFmpeg and ensure its bin directory is on PATH")
     })
 }
 
@@ -59,8 +89,7 @@ fn probe_media(
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).into_owned());
     }
-    let info: serde_json::Value =
-        serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
+    let info: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
     app.asset_protocol_scope()
         .allow_file(&path)
         .map_err(|e| e.to_string())?;
@@ -100,8 +129,18 @@ struct DonePayload {
 
 const VALUELESS_OPTS: &[&str] = &["-vn", "-an"];
 const VALUE_OPTS: &[&str] = &[
-    "-ss", "-to", "-c", "-c:v", "-c:a", "-b:a", "-crf", "-preset",
-    "-vf", "-filter_complex", "-map", "-loop",
+    "-ss",
+    "-to",
+    "-c",
+    "-c:v",
+    "-c:a",
+    "-b:a",
+    "-crf",
+    "-preset",
+    "-vf",
+    "-filter_complex",
+    "-map",
+    "-loop",
 ];
 
 /// The WebView supplies ffmpeg options; enforce a strict allowlist so a
@@ -208,7 +247,15 @@ fn start_convert(
             let message = if ok {
                 String::new()
             } else {
-                stderr_text.lines().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+                stderr_text
+                    .lines()
+                    .rev()
+                    .take(6)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n")
             };
             let _ = app.emit(
                 "convert-done",

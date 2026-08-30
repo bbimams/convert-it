@@ -8,6 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "bun test verify/ui.test.ts",
+    "release": "bun scripts/release.ts",
+    "release:check": "bun scripts/release.ts --verify",
     "tauri": "tauri"
   },
   "dependencies": {
