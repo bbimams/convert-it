@@ -37,7 +37,9 @@ function setCargoVersion(path: string, version: string): void {
     /(\[package\][\s\S]*?\nversion = ")[^"]+("\n)/,
     `$1${version}$2`,
   );
-  if (next === source) throw new Error(`Could not update ${path}`);
+  if (next === source && !source.includes(`version = "${version}"`)) {
+    throw new Error(`Could not update ${path}`);
+  }
   writeFileSync(path, next);
 }
 
