@@ -24,6 +24,11 @@ function currentVersion(): string {
   const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
   return config.version;
 }
+function nextVersion(): string {
+  const match = currentVersion().match(/^(0)\.(\d+)\.(\d+)/);
+  if (!match) throw new Error("Current application version is not valid ZeroVer.");
+  return `${match[1]}.${match[2]}.${Number(match[3]) + 1}`;
+}
 
 function setJsonVersion(path: string, version: string): void {
   const value = JSON.parse(readFileSync(path, "utf8"));
@@ -140,7 +145,8 @@ function verify(): void {
   console.log(`Release configuration is valid for v${version}.`);
 }
 
-function dryRun(version: string): void {
+function dryRun(version = nextVersion()): void {
+  validateVersion(version);
   ensureRemote();
   const tag = `v${version}`;
   ensureTagIsAvailable(tag);
@@ -150,7 +156,7 @@ function dryRun(version: string): void {
 }
 
 function usage(): never {
-  console.error("Usage: bun scripts/release.ts <version>|--verify|--dry-run <version>");
+  console.error("Usage: bun scripts/release.ts [version]|--verify|--dry-run [version]");
   process.exit(2);
 }
 
@@ -159,15 +165,12 @@ try {
   if (argument === "--verify") {
     verify();
   } else if (argument === "--dry-run") {
-    const version = process.argv[3];
-    if (!version) usage();
-    validateVersion(version);
-    dryRun(version);
+    dryRun(process.argv[3]);
   } else if (argument) {
     validateVersion(argument);
     publish(argument);
   } else {
-    usage();
+    publish(nextVersion());
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);

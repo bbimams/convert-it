@@ -93,7 +93,8 @@ Useful commands:
 | `make build` | `bun run build` | Type-check and build the frontend. |
 | `make bundle` | `bun run tauri build` | Build native bundles for the current platform. |
 | `make release-check` | `bun run release:check` | Validate tests, builds, Rust, versions, and workflow presence. |
-| `make release-dry-run VERSION=x.y.z` | `bun run release -- --dry-run x.y.z` | Check the remote and tag without changing files. |
+| `make release` | `bun run release` | Auto-increment the patch version, validate, tag, and publish. |
+| `make release-dry-run` | `bun run release -- --dry-run` | Preview the next automatic patch version and tag. |
 
 Production bundles created locally are written below `src-tauri/target/release/bundle/`.
 
@@ -113,39 +114,37 @@ Production bundles created locally are written below `src-tauri/target/release/b
 
 ## Releasing
 
-Convert It follows [ZeroVer](https://0ver.org/): the major version remains `0`. Release tags use `v0.MINOR.PATCH`, optionally followed by a prerelease suffix. A pushed tag starts `.github/workflows/release.yml`, which validates the version and builds installers on macOS Apple Silicon, macOS Intel, Windows x64, and Linux x64. All successful jobs upload their artifacts to one GitHub Release.
+Convert It follows [ZeroVer](https://0ver.org/): the major version remains `0`. Releases automatically increment the patch component, for example `0.1.0` to `0.1.1`. A pushed release tag starts `.github/workflows/release.yml`, which validates the version and builds installers on macOS Apple Silicon, macOS Intel, Windows x64, and Linux x64. All successful jobs upload their artifacts to one GitHub Release.
 
 ### One-command release
 
 Start from the branch and commit that should be released. The working tree must be clean and the repository must have an `origin` remote.
 
-Preview the remote/tag checks without changing files:
+Preview the automatically selected version without changing files:
 
 ```sh
-make release-dry-run VERSION=0.2.0
+make release-dry-run
 ```
 
 Create and push the release:
 
 ```sh
-make release VERSION=0.2.0
+make release
 ```
 
 The command:
 
-1. Validates the ZeroVer version and confirms the tag does not already exist.
+1. Increments the current patch version and confirms the generated tag does not already exist.
 2. Updates `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
 3. Refreshes and validates lockfiles.
 4. Runs the UI suite, frontend production build, and Rust check.
-5. Commits the synchronized version as `chore(release): v0.2.0`.
-6. Creates an annotated `v0.2.0` tag.
-7. Pushes the commit and tag to `origin`.
-8. Lets GitHub Actions create the release and attach native installers.
+5. Commits the synchronized version, creates the matching tag, and pushes both to `origin`.
+6. Lets GitHub Actions create the release and attach native installers.
 
-Prereleases are supported:
+An explicit ZeroVer version can still be supplied when needed:
 
 ```sh
-make release VERSION=0.2.0-rc.1
+bun run release -- 0.2.0-rc.1
 ```
 
 Tags containing a prerelease suffix are published as GitHub prereleases.
@@ -191,10 +190,6 @@ Install the packages required by Tauri 2 for your distribution. Ubuntu 22.04 use
 sudo apt update
 sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
 ```
-
-### A release did not start
-
-Check that the pushed tag has the exact ZeroVer form `v0.MINOR.PATCH` or a supported prerelease form such as `v0.2.0-rc.1`, and that the three application version files match the tag without the leading `v`.
 
 ## License
 
