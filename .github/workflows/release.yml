@@ -55,8 +55,10 @@ jobs:
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
-          test "$(bun -e \"console.log(require('./package.json').version)\")" = "$VERSION"
-          test "$(bun -e \"console.log(require('./src-tauri/tauri.conf.json').version)\")" = "$VERSION"
+          PACKAGE_VERSION=$(bun -e 'console.log(require("./package.json").version)')
+          TAURI_VERSION=$(bun -e 'console.log(require("./src-tauri/tauri.conf.json").version)')
+          test "$PACKAGE_VERSION" = "$VERSION"
+          test "$TAURI_VERSION" = "$VERSION"
           grep -q "^version = \"$VERSION\"$" src-tauri/Cargo.toml
 
       - name: Run frontend verification
