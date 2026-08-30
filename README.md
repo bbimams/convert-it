@@ -158,7 +158,7 @@ The workflow can be rerun from **Actions → Release → Run workflow**. Enter a
 
 This automation publishes installers only to GitHub Releases. It does not upload or deploy Convert It to the Apple App Store, Microsoft Store, or any Linux software repository.
 
-Artifacts are unsigned unless you add signing separately. Unsigned macOS and Windows downloads can trigger operating-system warnings. Signing is intentionally outside this release workflow; add it only when you are ready to distribute trusted public binaries.
+macOS bundles use Tauri's ad-hoc signing identity so the complete application bundle is sealed correctly. Because the app is not Developer ID signed and notarized, macOS can still require **Open** from the Finder context menu on first launch. Fully warning-free public distribution requires a paid Apple Developer ID certificate and notarization; it does not require App Store deployment. Windows artifacts are unsigned and may show a SmartScreen warning.
 
 ## Security model
 
